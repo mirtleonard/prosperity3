@@ -3,16 +3,31 @@ from typing import List
 import string
 import jsonpickle
       
-class TraderStatus:
-    STARTED = 1
-    BOUGHT = 2
-
 POSITION_VOLUME_LIMIT = 50
 AVERAGE_WINDOW_SIZE = 100
 DISCOUNT_FACTOR = 0.9
 BUY_PRICE_MARGIN = 1
 SELL_PRICE_MARGIN = 1
 TRADE_VOLUME = 1
+
+class Average:
+    def __init__(self, window_size: int = AVERAGE_WINDOW_SIZE):
+        self.samples = 0
+        self.average_price = 0
+        self.prices_window = [] 
+        self.window_size = window_size
+        
+    def update(self, price):
+        if (len(self.prices_window) == self.window_size):
+            last  = self.prices_window.pop(0)
+            self.average_price = self.average_price - (last + price) / self.window_size
+        else:
+            self.average_price = (self.average_price * len(self.prices_window) + price) / (len(self.prices_window) + 1)
+        self.prices_window.append(price)
+        self.samples += 1
+
+    def is_good_approximation(self):
+        return self.samples >= self.window_size
 
 class TraderPosition:
     def __init__(self):
@@ -28,13 +43,12 @@ class TraderPosition:
             self.avg_price = (price * volume + self.avg_price * self.volume) / new_volume
         self.volume = new_volume
 
-class TraderData:
+class ProductData:
     def __init__(self):
-        self.iteration = 1
-        self.average = Average()
-        self.position = TraderPosition()
-        self.status = TraderStatus.STARTED
-        
+        self.average : Average = Average()
+        self.position : TraderPosition = TraderPosition()
+        self.iteration : int = 1
+
     def update(self, trade_prices, new_orders):
         self.iteration += 1
         for trade_price in trade_prices:
@@ -42,19 +56,17 @@ class TraderData:
         for order in new_orders:
             self.position.update(order.price, order.quantity)
 
-class Average:
+class CurrentMarketProductData:
     def __init__(self):
-        self.price = None
-        self.samples = 0
-        
-    def update(self, price):
-        if self.price is None:
-            self.price = price
-        self.price = self.price * DISCOUNT_FACTOR + price * (1 - DISCOUNT_FACTOR)
-        self.samples += 1
-    
-    def is_good_approximation(self):
-        return self.samples >= AVERAGE_WINDOW_SIZE
+        self.sell_orders : List[tuple[int, int]] = []
+        self.buy_orders : List[tuple[int, int]] = []
+        self.sell_average : Average = Average()
+        self.buy_average : Average = Average()
+
+
+class TraderData:
+    def __init__(self):
+        self.products : dict[str, ProductData] = {}
 
 class Trader:
     """
@@ -63,45 +75,47 @@ class Trader:
     - We can also add propotionality to the volume we want to trade depending on how big is the spred between average and current
     """
     def run(self, state: TradingState):
+        traderData = self.load_trader_data(state)
+        processed_market_orders = self.process_market_orders(traderData.products, state.order_depths)
+        own_trades = self.apply_per_trading_strategy(traderData.products, processed_market_orders)
+        return own_trades, 1, jsonpickle.encode(traderData)
+
+    def process_market_orders(self, trader_product_data: dict[str, ProductData], current_market: dict[str, OrderDepth]): 
+        processed_market_orders = {}
+        for product in current_market.keys():
+            order_depth: OrderDepth = current_market[product]
+            if product not in trader_product_data:
+                trader_product_data[product] = ProductData()
+            product_data: ProductData = trader_product_data[product]
+
+            current_product_data = CurrentMarketProductData()
+            current_product_data.sell_orders = sorted(list(order_depth.sell_orders.items()), key=lambda x: (x[0], abs(x[1])))
+            current_product_data.buy_orders = sorted(list(order_depth.buy_orders.items()), key=lambda x: (-x[0], abs(x[1])))
+
+            for order in order_depth.sell_orders.items():
+                current_product_data.sell_average.update(order[0])
+                product_data.average.update(order[0])
+            for order in order_depth.buy_orders.items():
+                current_product_data.buy_average.update(order[0])
+                product_data.average.update(order[0])
+            processed_market_orders[product] = current_product_data
+
+        return processed_market_orders
+            
+
+    def load_trader_data(self, state):
         if not state.traderData:
             traderData = TraderData()
         else:
-            traderData = jsonpickle.decode(state.traderData)
-        print(f"TraderDataObj - iteration: {traderData.iteration}")
+            traderData = jsonpickle.decode(state.traderData) 
+        if not isinstance(traderData, TraderData):
+            raise ValueError("Invalid trader data")
+        return traderData
 
-        # check all order book -- see how large it is
-        product = "KELP"
-        order_depth: OrderDepth = state.order_depths[product]
-        sell_orders, buy_orders = self.sort_market_orders(order_depth)
-            
-        orders: list[Order] = []
-        if traderData.average.is_good_approximation():
-            # compute sell market price for volume = TRADE_VOLUME
-            self.process_sell_orders(traderData, product, sell_orders, orders)
-            # compute buy market price for volume = TRADE_VOLUME
-            self.process_buy_orders(traderData, product, buy_orders, orders)
-
-        result = {}
-        for key in state.order_depths.keys():
-            result[key] = []
-        result[product] = orders
-
-        trade_prices = []
-        # print trades
-        if state.market_trades:
-            trades = state.market_trades[product]
-            print("Trades:")
-            print("Price : Volume")
-            for trade in trades:
-                print(f"{trade.price} : {trade.quantity}")
-            
-            trade_prices = [trade.price for trade in trades]
-            print(f"Current avg is {traderData.average.price} and is it good approx? {traderData.average.is_good_approximation()}")
-            print(f"Current position we have is {traderData.position.volume} volume of {product} bought at avg price {traderData.position.avg_price}")
-
-        traderData.update(trade_prices, orders)
-
-        return result, 1, jsonpickle.encode(traderData)
+    def apply_per_trading_strategy(self, trader_product_data: dict[str, ProductData], processed_market_orders: dict[str, CurrentMarketProductData]):
+        product1 = "SQUID_INK"
+        product2 = "KELP"
+    
 
     def process_buy_orders(self, traderData, product, buy_orders, orders):
         volume_taken, avg_buy_price, last_buy_price = self.calculate_buy_market_price(buy_orders)
