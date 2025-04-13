@@ -1,6 +1,5 @@
-from datamodel import OrderDepth, UserId, TradingState, Order
+from datamodel import OrderDepth, UserId, TradingState, Order, Symbol
 from typing import List
-import string
 import jsonpickle
       
 POSITION_VOLUME_LIMIT = 50
@@ -17,26 +16,48 @@ class Average:
         self.prices_window = [] 
         self.window_size = window_size
         
-    def update(self, price):
-        if (len(self.prices_window) == self.window_size):
-            last  = self.prices_window.pop(0)
-            self.average_price = self.average_price - (last + price) / self.window_size
-        else:
-            self.average_price = (self.average_price * len(self.prices_window) + price) / (len(self.prices_window) + 1)
-        self.prices_window.append(price)
-        self.samples += 1
+    def update(self, price, quantity = 1):
+        if len(self.prices_window) == 0:
+            self.average_price = price
+            return
+
+        # Remove old samples if adding new ones would exceed window size
+        while len(self.prices_window) > 0 and self.samples + quantity > self.window_size:
+            old_price, old_quantity = self.prices_window[0]
+            remove_quantity = min(old_quantity, self.samples + quantity - self.window_size)
+            
+            # Update average by removing contribution of samples being removed
+            self.average_price = (self.average_price * self.samples - old_price * remove_quantity) / (self.samples - remove_quantity)
+            
+            self.samples -= remove_quantity
+            if remove_quantity == old_quantity:
+                self.prices_window.pop(0)
+            else:
+                self.prices_window[0] = (old_price, old_quantity - remove_quantity)
+
+        added_quantity = min(self.window_size - self.samples, quantity)
+        self.prices_window.append((price, added_quantity))
+        self.average_price = (self.average_price * self.samples + added_quantity * price) / (self.samples + added_quantity)
+        self.samples += added_quantity
 
     def is_good_approximation(self):
-        return self.samples >= self.window_size
+        return self.samples == self.window_size
 
 class TraderPosition:
-    def __init__(self):
+    def __init__(self, position_limit = POSITION_VOLUME_LIMIT):
         self.avg_price = 0
         self.volume = 0
+        self.position_limit = position_limit
 
     def check_trade_allowed(self, volume):
-        return abs(self.volume + volume) <= POSITION_VOLUME_LIMIT
-    
+        return abs(self.volume + volume) <= self.position_limit
+
+    def get_max_sell(self):
+        return self.position_limit + self.volume
+
+    def get_max_buy(self):
+        return self.position_limit - self.volume
+
     def update(self, price, volume):
         new_volume = volume + self.volume
         if new_volume != 0:
@@ -44,9 +65,9 @@ class TraderPosition:
         self.volume = new_volume
 
 class ProductData:
-    def __init__(self):
+    def __init__(self, limit):
         self.average : Average = Average()
-        self.position : TraderPosition = TraderPosition()
+        self.position : TraderPosition = TraderPosition(limit)
         self.iteration : int = 1
 
     def update(self, trade_prices, new_orders):
@@ -60,9 +81,102 @@ class CurrentMarketProductData:
     def __init__(self):
         self.sell_orders : List[tuple[int, int]] = []
         self.buy_orders : List[tuple[int, int]] = []
-        self.sell_average : Average = Average()
-        self.buy_average : Average = Average()
+        self.buy_available : int = 0
+        self.sell_available : int = 0
+        self.sell_average : Average = Average(1)
+        self.buy_average : Average = Average(1)
 
+class Basket:
+    def __init__(self):
+        pass 
+
+class Spread:
+    def __init__(self, to_buy = {}, to_sell = {}):
+        self.to_buy : dict[Symbol, int] = to_buy
+        self.to_sell : dict[Symbol, int] = to_sell
+        self.profit : float = 0
+
+    def update(self,market: dict[Symbol, CurrentMarketProductData]):
+        normal = self.calculate_profit_for_current_market_data(market)
+        reversed = self.calculate_profit_for_current_market_data(market, True)
+        if (reversed > normal):
+            self.profit = reversed
+            aux = self.to_sell
+            self.to_sell = self.to_buy
+            self.to_buy = aux
+        else:
+            self.profit = normal
+
+    def calculate_profit_for_current_market_data(self, market_data : dict[Symbol, CurrentMarketProductData], reverse = False):
+        reverse_sign = -1 if reverse else 1
+
+        buy_side_notional = 0
+        quantity_buy_side = 0
+        for product, quantity in self.to_buy.items():
+            if market_data.get(product) != None:
+                buy_side_notional += market_data[product].sell_average.average_price * quantity
+                quantity_buy_side += quantity
+                
+        buy_side_notional /= quantity_buy_side if quantity_buy_side > 0 else 1
+
+        sell_side_notional = 0
+        sell_side_quantity = 0
+        for product, quantity in self.to_sell.items():
+            if market_data.get(product) != None:
+                sell_side_notional += market_data[product].buy_average.average_price * quantity
+                sell_side_quantity += quantity
+
+        sell_side_notional /= sell_side_quantity if sell_side_quantity > 0 else 1
+        return (sell_side_notional * reverse_sign) - (buy_side_notional * reverse_sign)
+
+
+available_spreads = [
+    Spread(
+        {"KELP": 1},
+        {"SQUID_INK": 1}
+    ), 
+    Spread(
+        {"PICNIC_BASKET1": 1},
+        {
+            "CROISSANTS": 6,
+            "JAMS": 3,
+            "DJEMBES": 1
+         }
+    ),
+    Spread(
+        {"PICNIC_BASKET2": 1},
+        {
+            "CROISSANTS": 4,
+            "JAMS": 2,
+        }
+    ),
+    Spread(
+        {"PICNIC_BASKET1": 2},
+        {
+            "PICNIC_BASKET2": 3,
+            "JAMS": 2,
+        }
+    ),
+    Spread(
+        {"PICNIC_BASKET1": 1},
+        { 
+            "PICNIC_BASKET2": 1,
+            "CROISSANTS": 2,
+            "DJEMBES": 1
+        }
+    )
+]
+
+POSITION_LIMITS = {
+    'RAINFOREST_RESIN': 50,
+    'KELP': 50, 
+    'SQUID_INK': 50,
+    'CROISSANTS': 250,
+    'JAMS': 350,
+    'DJEMBES': 60,
+    'PICNIC_BASKET1': 60,
+    'PICNIC_BASKET2': 100
+}
 
 class TraderData:
     def __init__(self):
@@ -85,7 +199,7 @@ class Trader:
         for product in current_market.keys():
             order_depth: OrderDepth = current_market[product]
             if product not in trader_product_data:
-                trader_product_data[product] = ProductData()
+                trader_product_data[product] = ProductData(POSITION_LIMITS[product])
             product_data: ProductData = trader_product_data[product]
 
             current_product_data = CurrentMarketProductData()
@@ -112,74 +226,63 @@ class Trader:
             raise ValueError("Invalid trader data")
         return traderData
 
-    def apply_per_trading_strategy(self, trader_product_data: dict[str, ProductData], processed_market_orders: dict[str, CurrentMarketProductData]):
-        product1 = "SQUID_INK"
-        product2 = "KELP"
-    
+    def apply_per_trading_strategy(self, trader: dict[str, ProductData], market: dict[str, CurrentMarketProductData])-> dict[Symbol, Order]:
+        for spread in available_spreads:
+            spread.update(market)
 
-    def process_buy_orders(self, traderData, product, buy_orders, orders):
-        volume_taken, avg_buy_price, last_buy_price = self.calculate_buy_market_price(buy_orders)
+        available_spreads.sort(key=lambda spread: spread.profit, reverse=True)
+        orders = {}
+        for spread in available_spreads:
+            spread_orders = self.make_trades_for_spread(spread, market, trader)
+            for order in spread_orders:
+                if order.symbol not in orders:
+                    orders[order.symbol] = []
+                orders[order.symbol].append(order)
+        return orders
 
-        is_profitable = avg_buy_price - traderData.position.avg_price >= SELL_PRICE_MARGIN and avg_buy_price - traderData.average.price >= SELL_PRICE_MARGIN
+    def make_trades_for_spread(self, spread: Spread, market: dict[str, CurrentMarketProductData], trader: dict[str, ProductData]) -> list[Order]:
+        max_volume = self.get_max_volume(spread, trader, market)
+        return self.make_orders(spread, max_volume, market, trader) if max_volume > 0 else []
 
-        if volume_taken > 0 and traderData.position.check_trade_allowed(-volume_taken) and is_profitable:
-                # send sell order at last market price we want to match
-            print("SELL", str(-volume_taken) + "xox", last_buy_price)
-            order = Order(product, last_buy_price, -volume_taken)
-            orders.append(order)
-        else:
-            print(f"WON'T SELL because market profit margin price is {avg_buy_price - traderData.average.price} and my limit is {SELL_PRICE_MARGIN}")
+    def make_orders(self, spread: Spread, max_volume: int, market: dict[str, CurrentMarketProductData], trader: dict[str, ProductData]) -> list[Order]:
+        orders = []
+        for product, quantity in spread.to_buy.items():
+            total_quantity = quantity * max_volume
+            for market_order in market[product].sell_orders:
+                order_price, order_volume = market_order
+                order_volume = total_quantity if order_volume > total_quantity else order_volume
+                trader[product].position.update(order_price, order_volume)
+                orders.append(Order(product, order_price, order_volume))
+                total_quantity -= order_volume
+                if total_quantity == 0:
+                    break
 
-    def calculate_buy_market_price(self, buy_orders):
-        index = 0
-        volume_taken = 0
-        avg_buy_price = 0
-        last_buy_price = None
-        while index < len(buy_orders) and volume_taken < TRADE_VOLUME:
-            temp_volume = min(TRADE_VOLUME - volume_taken, buy_orders[index][1])
-            avg_buy_price += buy_orders[index][0] * temp_volume
-            volume_taken += temp_volume
-            last_buy_price = buy_orders[index][0]
-            index += 1
-        avg_buy_price /= volume_taken
-        print(f"Market Buy price computed for volume = {volume_taken} is {avg_buy_price}")
-        return volume_taken,avg_buy_price,last_buy_price
+        for product, quantity in spread.to_sell.items():
+            total_quantity = quantity * max_volume
+            for market_order in market[product].buy_orders:
+                order_price, order_volume = market_order
+                order_volume = total_quantity if order_volume > total_quantity else order_volume
+                trader[product].position.update(order_price, -order_volume)
+                orders.append(Order(product, order_price, order_volume))
+                total_quantity -= order_volume
+                if total_quantity == 0:
+                    break
+        return orders
 
-    def process_sell_orders(self, traderData, product, sell_orders, orders):
-        """
-        We should be able to find out the best trades that we can do instead of relying on the TRADE_VOLUME 
-        """
-        volume_taken, avg_sell_price, last_sell_price = self.calculate_sell_market_price(sell_orders)
-        is_profitable =  traderData.position.avg_price - avg_sell_price >= BUY_PRICE_MARGIN and  traderData.average.price - avg_sell_price >= BUY_PRICE_MARGIN
+    def get_max_volume(self, spread: Spread, trader: dict[str, ProductData], market: dict[str, CurrentMarketProductData]) -> int:
+        max_volume = 0
+        for product, quantity in spread.to_buy.items():
+            if product not in market:
+                return 0
+            max_volume = min(max_volume, int(trader[product].position.get_max_buy() / quantity))
+            max_volume = min(max_volume, int(market[product].buy_available / quantity))
 
-        if volume_taken > 0 and traderData.position.check_trade_allowed(volume_taken) and is_profitable:
-            # send buy order at last market price we want to match
-            print("BUY", str(volume_taken) + "xox", last_sell_price)
-            order = Order(product, last_sell_price, volume_taken)
-            orders.append(order)
-        else:
-            print(f"WON'T BUY because market profit margin price is {traderData.average.price - avg_sell_price} and my limit is {BUY_PRICE_MARGIN}")
-
-    def calculate_sell_market_price(self, sell_orders):
-        """
-        Calculate the market price for selling a given volume of orders.
-
-        <p>TODO: <br>
-        We should be able to find out the best trades that we can do instead of relying on the TRADE_VOLUM
-        """
-        index = 0
-        volume_taken = 0
-        avg_sell_price = 0
-        last_sell_price = None
-        while index < len(sell_orders) and volume_taken < TRADE_VOLUME:
-            temp_volume = min(TRADE_VOLUME - volume_taken, sell_orders[index][1])
-            avg_sell_price += sell_orders[index][0] * temp_volume
-            volume_taken += temp_volume
-            last_sell_price = sell_orders[index][0]
-            index += 1
-        avg_sell_price /= volume_taken
-        print(f"Market Sell price computed for volume = {volume_taken} is {avg_sell_price}")
-        return volume_taken,avg_sell_price,last_sell_price
+        for product, quantity in spread.to_sell.items():
+            if product not in market:
+                return 0
+            max_volume = min(max_volume, int(trader[product].position.get_max_sell() / quantity))
+            max_volume = min(max_volume, int(market[product].sell_available / quantity))
+        return max_volume        
 
     def sort_market_orders(self, order_depth):
         sell_orders = list(order_depth.sell_orders.items())

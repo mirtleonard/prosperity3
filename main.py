@@ -16,28 +16,28 @@ result, conversions, traderData = trader.run(
     "",
     datetime.time,
     {
-        "RAINFOREST_RESIN": Listing("RSN", "RAINFOREST_RESIN", "SEASHELLS"),
-        "KELP": Listing("KLP", "KELP", "SEASHELLS"),
+        "RAINFOREST_RESIN": Listing("RAINFOREST_RESIN", "RAINFOREST_RESIN", "SEASHELLS"),
+        "KELP": Listing("KELP", "KELP", "SEASHELLS"),
     }, 
     {
-        "RSN": rsn_order_depth,
-        "KLP": klp_order_depth,
+        "RAINFOREST_RESIN": rsn_order_depth,
+        "KELP": klp_order_depth,
     },
     { # own trades
-        "RSN":[],
-        "KLP": [],
+        "RAINFOREST_RESIN":[],
+        "KELP": [],
     }, 
     { # market trades
-        "RSN": [
-            Trade("RSN", 100, 10, "user1", "user2", datetime.time()),
+        "RAINFOREST_RESIN": [
+            Trade("RAINFOREST_RESIN", 100, 10, "user1", "user2", datetime.time()),
         ],
-        "KLP": [
-            Trade("KLP", 200, 20, "user3", "user4", datetime.time()),
+        "KELP": [
+            Trade("KELP", 200, 20, "user3", "user4", datetime.time()),
         ],
     },
     { # positions
-        "RSN": 2,
-        "KLP": 3,
+        "RAINFOREST_RESIN": 2,
+        "KELP": 3,
     },
     {}
 ))
@@ -48,28 +48,28 @@ result, c, t = trader.run(
         traderData,
         datetime.time,
     {
-        "RAINFOREST_RESIN": Listing("RSN", "RAINFOREST_RESIN", "SEASHELLS"),
-        "KELP": Listing("KLP", "KELP", "SEASHELLS"),
+        "RAINFOREST_RESIN": Listing("RAINFOREST_RESIN", "RAINFOREST_RESIN", "SEASHELLS"),
+        "KELP": Listing("KELP", "KELP", "SEASHELLS"),
     }, 
     {
-        "RSN": rsn_order_depth,
-        "KLP": klp_order_depth,
+        "RAINFOREST_RESIN": rsn_order_depth,
+        "KELP": klp_order_depth,
     },
     { # own trades
-        "RSN":[],
-        "KLP": [],
+        "RAINFOREST_RESIN":[],
+        "KELP": [],
     }, 
     { # market trades
-        "RSN": [
-            Trade("RSN", 100, 10, "user1", "user2", datetime.time()),
+        "RAINFOREST_RESIN": [
+            Trade("RAINFOREST_RESIN", 100, 10, "user1", "user2", datetime.time()),
         ],
-        "KLP": [
-            Trade("KLP", 200, 20, "user3", "user4", datetime.time()),
+        "KELP": [
+            Trade("KELP", 200, 20, "user3", "user4", datetime.time()),
         ],
     },
     { # positions
-        "RSN": 2,
-        "KLP": 3,
+        "RAINFOREST_RESIN": 2,
+        "KELP": 3,
     },
     {}
     )
