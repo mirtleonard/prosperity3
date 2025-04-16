@@ -17,6 +17,7 @@ class Average:
         self.window_size = window_size
         
     def update(self, price, quantity = 1):
+        print(f"Updating average with price: {price}, quantity: {quantity}")
         if len(self.prices_window) == 0:
             self.average_price = price
             return
@@ -86,6 +87,14 @@ class CurrentMarketProductData:
         self.sell_average : Average = Average(1)
         self.buy_average : Average = Average(1)
 
+    def update(self, order_price, order_volume):
+        if order_volume > 0:
+            self.buy_available += order_volume
+            self.buy_average.update(order_price, order_volume)
+        else:
+            self.sell_available += -order_volume
+            self.sell_average.update(order_price, -1 * order_volume)
+
 class Basket:
     def __init__(self):
         pass 
@@ -96,9 +105,10 @@ class Spread:
         self.to_sell : dict[Symbol, int] = to_sell
         self.profit : float = 0
 
-    def update(self,market: dict[Symbol, CurrentMarketProductData]):
+    def update(self, market: dict[Symbol, CurrentMarketProductData]):
         normal = self.calculate_profit_for_current_market_data(market)
         reversed = self.calculate_profit_for_current_market_data(market, True)
+        print(f"Normal: {normal}, Reversed: {reversed} for {self.to_buy} -> {self.to_sell}")
         if (reversed > normal):
             self.profit = reversed
             aux = self.to_sell
@@ -175,7 +185,13 @@ POSITION_LIMITS = {
     'JAMS': 350,
     'DJEMBES': 60,
     'PICNIC_BASKET1': 60,
-    'PICNIC_BASKET2': 100
+    'PICNIC_BASKET2': 100,
+    'VOLCANIC_ROCK': 400,
+    'VOLCANIC_ROCK_VOUCHER_9500': 200,
+    'VOLCANIC_ROCK_VOUCHER_9750': 200,
+    'VOLCANIC_ROCK_VOUCHER_10000': 200,
+    'VOLCANIC_ROCK_VOUCHER_10250': 200,
+    'VOLCANIC_ROCK_VOUCHER_10500': 200,   
 }
 
 class TraderData:
@@ -190,7 +206,9 @@ class Trader:
     """
     def run(self, state: TradingState):
         traderData = self.load_trader_data(state)
+        print(f"TraderData: {traderData}")
         processed_market_orders = self.process_market_orders(traderData.products, state.order_depths)
+        print(f"Processed market orders: {processed_market_orders}")
         own_trades = self.apply_per_trading_strategy(traderData.products, processed_market_orders)
         return own_trades, 1, jsonpickle.encode(traderData)
 
@@ -202,17 +220,17 @@ class Trader:
                 trader_product_data[product] = ProductData(POSITION_LIMITS[product])
             product_data: ProductData = trader_product_data[product]
 
-            current_product_data = CurrentMarketProductData()
-            current_product_data.sell_orders = sorted(list(order_depth.sell_orders.items()), key=lambda x: (x[0], abs(x[1])))
-            current_product_data.buy_orders = sorted(list(order_depth.buy_orders.items()), key=lambda x: (-x[0], abs(x[1])))
+            current_market_product = CurrentMarketProductData()
+            current_market_product.sell_orders = sorted(list(order_depth.sell_orders.items()), key=lambda x: (x[0], abs(x[1])))
+            current_market_product.buy_orders = sorted(list(order_depth.buy_orders.items()), key=lambda x: (-x[0], abs(x[1])))
 
             for order in order_depth.sell_orders.items():
-                current_product_data.sell_average.update(order[0])
-                product_data.average.update(order[0])
+                current_market_product.update(order[0], order[1])
+                product_data.average.update(order)
             for order in order_depth.buy_orders.items():
-                current_product_data.buy_average.update(order[0])
-                product_data.average.update(order[0])
-            processed_market_orders[product] = current_product_data
+                current_market_product.update(order[0], order[1])
+                product_data.average.update(order)
+            processed_market_orders[product] = current_market_product
 
         return processed_market_orders
             
@@ -235,6 +253,7 @@ class Trader:
         for spread in available_spreads:
             spread_orders = self.make_trades_for_spread(spread, market, trader)
             for order in spread_orders:
+                print(f"Order: {order}")
                 if order.symbol not in orders:
                     orders[order.symbol] = []
                 orders[order.symbol].append(order)
@@ -242,6 +261,7 @@ class Trader:
 
     def make_trades_for_spread(self, spread: Spread, market: dict[str, CurrentMarketProductData], trader: dict[str, ProductData]) -> list[Order]:
         max_volume = self.get_max_volume(spread, trader, market)
+        print(f"Max volume for spread {spread}: {max_volume}")  
         return self.make_orders(spread, max_volume, market, trader) if max_volume > 0 else []
 
     def make_orders(self, spread: Spread, max_volume: int, market: dict[str, CurrentMarketProductData], trader: dict[str, ProductData]) -> list[Order]:
@@ -250,6 +270,7 @@ class Trader:
             total_quantity = quantity * max_volume
             for market_order in market[product].sell_orders:
                 order_price, order_volume = market_order
+                order_volume = -order_volume
                 order_volume = total_quantity if order_volume > total_quantity else order_volume
                 trader[product].position.update(order_price, order_volume)
                 orders.append(Order(product, order_price, order_volume))
@@ -263,24 +284,30 @@ class Trader:
                 order_price, order_volume = market_order
                 order_volume = total_quantity if order_volume > total_quantity else order_volume
                 trader[product].position.update(order_price, -order_volume)
-                orders.append(Order(product, order_price, order_volume))
+                orders.append(Order(product, order_price, -order_volume))
                 total_quantity -= order_volume
                 if total_quantity == 0:
                     break
         return orders
 
     def get_max_volume(self, spread: Spread, trader: dict[str, ProductData], market: dict[str, CurrentMarketProductData]) -> int:
-        max_volume = 0
+        max_volume = 100000
         for product, quantity in spread.to_buy.items():
             if product not in market:
                 return 0
+            print("quantity", quantity)
+            print(f"Position limit for {product}: {trader[product].position.position_limit} {trader[product].position.volume}")
             max_volume = min(max_volume, int(trader[product].position.get_max_buy() / quantity))
+            print(f"Available buy for {product}: {market[product].buy_available}")
             max_volume = min(max_volume, int(market[product].buy_available / quantity))
 
         for product, quantity in spread.to_sell.items():
             if product not in market:
                 return 0
+            print("quantity", quantity)
+            print(f"Position limit for {product}: {trader[product].position.position_limit} {trader[product].position.volume}")
             max_volume = min(max_volume, int(trader[product].position.get_max_sell() / quantity))
+            print(f"Available sell for {product}: {market[product].sell_available}")
             max_volume = min(max_volume, int(market[product].sell_available / quantity))
         return max_volume        
 
